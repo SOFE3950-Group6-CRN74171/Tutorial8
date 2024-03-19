@@ -1,10 +1,3 @@
-/*
- * Tutorial 8 Signals and Data Structures Part II for SOFE 3950: Operating Systems
- *
- * Copyright (C) 2024, <Mostafa Abedi, Nathaniel Manoj, Calvin Reveredo>
- * All rights reserved.
- *
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +58,7 @@ struct Queue *createQueue(unsigned capacity) {
 
 // Function to check if queue is full
 int isFull(struct Queue *queue) {
-    return (queue->size == queue->capacity);
+    return (queue->size == (int)queue->capacity);
 }
 
 // Function to check if queue is empty
@@ -77,7 +70,7 @@ int isEmpty(struct Queue *queue) {
 void push(struct Queue *queue, struct proc *item) {
     if (isFull(queue))
         return;
-    queue->rear = (queue->rear + 1) % queue->capacity;
+    queue->rear = (queue->rear + 1) % (int)queue->capacity;
     queue->array[queue->rear] = item;
     queue->size = queue->size + 1;
 }
@@ -87,13 +80,13 @@ struct proc *pop(struct Queue *queue) {
     if (isEmpty(queue))
         return NULL;
     struct proc *item = queue->array[queue->front];
-    queue->front = (queue->front + 1) % queue->capacity;
+    queue->front = (queue->front + 1) % (int)queue->capacity;
     queue->size = queue->size - 1;
     return item;
 }
 
 // Function to execute a process
-void execute_process(struct proc *process, int *avail_mem) {
+void execute_process(struct proc *process, int *avail_mem, struct Queue *secondary_queue) {
     printf("Executing process: Name: %s, Priority: %d, PID: %d, Memory: %d, Runtime: %d\n",
            process->name, process->priority, process->pid, process->memory, process->runtime);
 
@@ -115,19 +108,20 @@ void execute_process(struct proc *process, int *avail_mem) {
         }
         // Sleep for runtime seconds
         sleep(process->runtime);
-        // Suspend the process
+        // Send SIGTSTP to terminate the process
         kill(pid, SIGTSTP);
-        process->suspended = 1;
+        waitpid(pid, NULL, 0);
+        // Free memory used by process
+        for (int i = process->address; i < process->address + process->memory; i++) {
+            avail_mem[i] = 0;
+        }
+        // Add the process back to the secondary queue
+        push(secondary_queue, process);
     } else {
         // Fork failed
         perror("fork failed");
         exit(EXIT_FAILURE);
     }
-}
-
-// Function to handle SIGCONT signal
-void sigcont_handler(int sig) {
-    // Do nothing, allowing the process to resume
 }
 
 int main() {
@@ -139,7 +133,7 @@ int main() {
     int avail_mem[MEMORY] = {0};
 
     // Read processes from file and populate queues
-    FILE *file = fopen("processes_q2.txt", "r");
+    FILE *file = fopen("process", "r");
     if (file == NULL) {
         printf("Error opening file\n");
         exit(EXIT_FAILURE);
@@ -159,16 +153,8 @@ int main() {
     // Execute processes in priority queue
     while (!isEmpty(priority_queue)) {
         struct proc *process = pop(priority_queue);
-        execute_process(process, avail_mem);
-        waitpid(process->pid, NULL, 0);
-        // Free memory used by process
-        for (int i = process->address; i < process->address + process->memory; i++) {
-            avail_mem[i] = 0;
-        }
+        execute_process(process, avail_mem, secondary_queue);
     }
-
-    // Set up signal handler for SIGCONT
-    signal(SIGCONT, sigcont_handler);
 
     // Execute processes in secondary queue
     while (!isEmpty(secondary_queue)) {
@@ -185,26 +171,7 @@ int main() {
             push(secondary_queue, process);
             continue;
         }
-        execute_process(process, avail_mem);
-        // If process was suspended, resume it
-        if (process->suspended) {
-            kill(process->pid, SIGCONT);
-            process->suspended = 0;
-        }
-        sleep(1);
-        // If only 1 second of runtime left, terminate the process
-        if (process->runtime == 1) {
-            kill(process->pid, SIGINT);
-            waitpid(process->pid, NULL, 0);
-            // Free memory used by process
-            for (int i = process->address; i < process->address + process->memory; i++) {
-                avail_mem[i] = 0;
-            }
-        } else {
-            process->runtime--;
-            process->suspended = 1;
-            push(secondary_queue, process);
-        }
+        execute_process(process, avail_mem, secondary_queue);
     }
 
     return 0;
