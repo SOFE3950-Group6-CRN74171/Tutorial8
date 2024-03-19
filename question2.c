@@ -1,3 +1,11 @@
+/*
+ * Tutorial 8 Signals and Data Structures Part II for SOFE 3950: Operating Systems
+ *
+ * Copyright (C) 2024, <Mostafa Abedi, Nathaniel Manoj, Calvin Reveredo>
+ * All rights reserved.
+ *
+*/
+#define _POSIX_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,18 +93,18 @@ struct proc *pop(struct Queue *queue) {
     return item;
 }
 
-// Function to execute a process
+// Function to execute the "process" binary
 void execute_process(struct proc *process, int *avail_mem, struct Queue *secondary_queue) {
     printf("Executing process: Name: %s, Priority: %d, PID: %d, Memory: %d, Runtime: %d\n",
            process->name, process->priority, process->pid, process->memory, process->runtime);
 
-    // Fork and exec
+    // Fork and exec the "process" binary
     pid_t pid = fork();
     if (pid == 0) {
         // Child process
         char memory_arg[10];
         sprintf(memory_arg, "%d", process->memory);
-        execl(process->name, process->name, memory_arg, NULL);
+        execl("./process", "process", memory_arg, NULL);
         perror("exec failed");
         exit(EXIT_FAILURE);
     } else if (pid > 0) {
@@ -106,17 +114,26 @@ void execute_process(struct proc *process, int *avail_mem, struct Queue *seconda
         for (int i = process->address; i < process->address + process->memory; i++) {
             avail_mem[i] = 1;
         }
-        // Sleep for runtime seconds
-        sleep(process->runtime);
+        // Run the process for the specified runtime or 1 second
+        int run_time = (process->priority == 0) ? process->runtime : 1;
+        sleep(run_time);
         // Send SIGTSTP to terminate the process
         kill(pid, SIGTSTP);
-        waitpid(pid, NULL, 0);
+        waitpid(pid, NULL, WUNTRACED); // Wait for child to be stopped
         // Free memory used by process
         for (int i = process->address; i < process->address + process->memory; i++) {
             avail_mem[i] = 0;
         }
-        // Add the process back to the secondary queue
-        push(secondary_queue, process);
+        // Decrement runtime and handle termination for secondary queue processes
+        if (process->priority != 0 && process->runtime > 1) {
+            process->runtime -= 1;
+            // Set suspended flag and add back to the secondary queue
+            process->suspended = 1;
+            push(secondary_queue, process);
+        } else {
+            printf("Process %s terminated\n", process->name);
+            free(process);
+        }
     } else {
         // Fork failed
         perror("fork failed");
@@ -133,7 +150,7 @@ int main() {
     int avail_mem[MEMORY] = {0};
 
     // Read processes from file and populate queues
-    FILE *file = fopen("process", "r");
+    FILE *file = fopen("processes_q2.txt", "r");
     if (file == NULL) {
         printf("Error opening file\n");
         exit(EXIT_FAILURE);
@@ -159,18 +176,6 @@ int main() {
     // Execute processes in secondary queue
     while (!isEmpty(secondary_queue)) {
         struct proc *process = pop(secondary_queue);
-        // Check if there's enough memory available
-        int enough_memory = 1;
-        for (int i = 0; i < MEMORY; i++) {
-            if (avail_mem[i] == 1) {
-                enough_memory = 0;
-                break;
-            }
-        }
-        if (!enough_memory) {
-            push(secondary_queue, process);
-            continue;
-        }
         execute_process(process, avail_mem, secondary_queue);
     }
 
